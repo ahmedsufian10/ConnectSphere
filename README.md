@@ -1,8 +1,10 @@
-# BlogSphere API
+# ConnectSphere
 
-A REST API backend for a blog platform, built with Node.js, Express, MongoDB, and Mongoose.
+A full-stack social media platform — React frontend, Node.js/Express/MongoDB backend, JWT authentication, and real-time notifications via Socket.io.
 
-> Week 4 Task — MERN Stack Summer Internship, The Tech Pulses
+> Week 5–6 Capstone Task — MERN Stack Summer Internship, The Tech Pulses
+
+Extends the [Week 4 Blog API](https://github.com/ahmedsufian10/connectsphere-api/tree/main) into a portfolio-worthy social app: follow/feed system, likes, comments, live notifications, and image uploads, all sitting behind real JWT auth.
 
 ---
 
@@ -14,23 +16,18 @@ A REST API backend for a blog platform, built with Node.js, Express, MongoDB, an
 - [Project Structure](#project-structure)
 - [Data Models](#data-models)
 - [API Reference](#api-reference)
-- [Filtering & Search](#filtering--search)
-- [Error Handling](#error-handling)
-- [Population](#population)
-- [Cascading Deletes](#cascading-deletes)
+- [Real-Time Notifications](#real-time-notifications)
 - [Setup](#setup)
 - [Testing](#testing)
-- [Roadmap](#roadmap)
+- [Security Notes](#security-notes)
 
 ---
 
 ## Overview
 
-BlogSphere is a pure backend project — there is no frontend by design. Every endpoint is meant to be tested through Postman or Thunder Client.
+ConnectSphere is a two-sided project: an Express/MongoDB REST API (`server/`) and a React/Vite single-page app (`client/`) that consumes it. Every protected route checks a JWT server-side — the UI hides buttons for convenience, but ownership and auth are enforced on the backend, not just in the interface.
 
-The goal of this task was to build a solid foundation in the M and E of MERN: designing schemas, writing controllers, wiring routes, handling errors properly, and connecting to a real cloud database.
-
-This backend becomes the foundation for Weeks 5–6, where a React frontend and JWT authentication get layered on top of what's built here.
+The backend reuses and extends the Week 4 Blog API's User, Post, and Comment models rather than rebuilding them, and adds a Notification model plus a Socket.io layer for live updates.
 
 ---
 
@@ -38,13 +35,19 @@ This backend becomes the foundation for Weeks 5–6, where a React frontend and 
 
 | Layer | Technology | Purpose |
 |---|---|---|
-| Runtime | Node.js | Runs the server outside the browser |
+| Runtime | Node.js | Server runtime |
 | Framework | Express.js | Routing and HTTP handling |
 | Database | MongoDB Atlas | Cloud-hosted NoSQL storage |
 | ODM | Mongoose | Schemas, models, queries |
-| Config | dotenv | Environment variable management |
-| Dev Tool | Nodemon | Auto-restart during development |
+| Auth | jsonwebtoken | Stateless JWT authentication |
+| Password hashing | bcryptjs | Replaces Week 4's plain-text passwords |
+| File uploads | Multer | Multipart form-data handling, stored locally under `server/uploads/` |
+| Real-time | Socket.io | Live notification delivery to online users |
 | Validation | express-validator | Input validation and sanitization |
+| Frontend | React (Vite) | Single-page app |
+| Routing | React Router | Client-side routing |
+| State | Context API | Auth session (`AuthContext`) and socket connection (`SocketContext`) |
+| HTTP client | Axios | API requests with an auth header interceptor |
 | Testing | Postman | Manual endpoint testing |
 
 ---
@@ -53,33 +56,36 @@ This backend becomes the foundation for Weeks 5–6, where a React frontend and 
 
 ```mermaid
 flowchart LR
-    subgraph Client["Postman / Thunder Client"]
-        A[HTTP Requests]
+    subgraph Client["React SPA (Vite)"]
+        A[AuthContext]
+        B[SocketContext]
+        C[Pages / Components]
     end
 
     subgraph Server["Express Server"]
-        B[Routes]
-        C[express-validator]
-        D[Controllers]
-        E[Error Handler]
+        D[Auth Middleware — JWT verify]
+        E[Routes]
+        F[Controllers]
+        G[Socket.io — online user map]
     end
 
     subgraph DB["MongoDB Atlas"]
-        F[(Users)]
-        G[(Posts)]
-        H[(Comments)]
+        H[(Users)]
+        I[(Posts)]
+        J[(Comments)]
+        K[(Notifications)]
     end
 
-    A --> B
+    C -- Axios + Bearer token --> D
+    D -- valid --> E
+    E --> F
+    F --> H
+    F --> I
+    F --> J
+    F --> K
+    F -- like / comment / follow --> G
+    G -- emits event --> B
     B --> C
-    C -- valid --> D
-    C -- invalid --> E
-    D --> F
-    D --> G
-    D --> H
-    D -- on error --> E
-    E --> A
-    D -- success --> A
 ```
 
 ---
@@ -87,78 +93,114 @@ flowchart LR
 ## Project Structure
 
 ```
-blogsphere-api/
-├── server.js              → Entry point — connects DB, starts server
-├── .env                    → PORT, MONGODB_URI (excluded from Git)
-├── .gitignore               → node_modules, .env, logs
-├── package.json
+connectsphere-api/
+├── server/
+│   ├── server.js                    → Entry point — DB connection, Socket.io setup, online-user map
+│   ├── .env.example                   → Template for required environment variables
+│   ├── .gitignore                      → node_modules, .env, uploads/* (except .gitkeep)
+│   ├── uploads/                         → Local image storage (Multer target)
+│   │
+│   ├── config/
+│   │   └── db.js                          → Mongoose connection logic
+│   │
+│   ├── models/
+│   │   ├── User.js                          → Extended: avatar, coverPhoto, followers/following
+│   │   ├── Post.js                           → Extended: likes array, image, tags
+│   │   ├── Comment.js                         → Unchanged from Week 4
+│   │   └── Notification.js                     → New — like/comment/follow events
+│   │
+│   ├── routes/
+│   │   ├── authRoutes.js                        → /api/auth
+│   │   ├── userRoutes.js                         → /api/users
+│   │   ├── postRoutes.js                          → /api/posts
+│   │   ├── commentRoutes.js                        → /api/comments
+│   │   └── notificationRoutes.js                    → /api/notifications
+│   │
+│   ├── controllers/
+│   │   ├── authController.js                        → Register, login, JWT issuance
+│   │   ├── userController.js                         → Profile, follow/unfollow, search
+│   │   ├── postController.js                          → CRUD, feed vs explore, likes
+│   │   ├── commentController.js                        → Add/view/delete comments
+│   │   └── notificationController.js                    → List, mark read
+│   │
+│   └── middleware/
+│       ├── auth.js                                        → JWT verification, attaches req.user
+│       ├── upload.js                                       → Multer config (type/size limits)
+│       ├── validate.js                                      → Runs validation chains, formats 400s
+│       └── errorHandler.js                                  → Global error handler + 404 handler
 │
-├── config/
-│   └── db.js                  → Mongoose connection logic
-│
-├── models/
-│   ├── User.js                  → User schema
-│   ├── Post.js                   → Post schema
-│   └── Comment.js                 → Comment schema
-│
-├── routes/
-│   ├── userRoutes.js               → /api/users endpoints + validation chains
-│   ├── postRoutes.js                → /api/posts endpoints + validation chains
-│   └── commentRoutes.js              → /api/comments endpoints + validation chains
-│
-├── controllers/
-│   ├── userController.js              → User business logic
-│   ├── postController.js               → Post business logic
-│   └── commentController.js             → Comment business logic
-│
-└── middleware/
-    ├── errorHandler.js                   → Global error handler + 404 handler
-    └── validate.js                        → Runs validation chains, formats 400s
+└── client/
+    └── src/
+        ├── App.jsx                     → Route definitions
+        ├── main.jsx                     → App entry point
+        ├── context/
+        │   ├── AuthContext.jsx            → Login state, token, current user
+        │   └── SocketContext.jsx           → Socket.io connection, online users
+        ├── pages/
+        │   ├── Login.jsx / Register.jsx
+        │   ├── Feed.jsx / Explore.jsx
+        │   ├── Profile.jsx / EditProfile.jsx
+        │   └── PostDetail.jsx
+        ├── components/
+        │   ├── Navbar.jsx
+        │   ├── PostCard.jsx / CreatePostForm.jsx
+        │   └── AvatarImg.jsx
+        └── utils/
+            └── api.js                       → Axios instance with auth interceptor
 ```
 
 ---
 
 ## Data Models
 
-### User
+### User (extended from Week 4)
 
 | Field | Type | Rules |
 |---|---|---|
 | `name` | String | Required, trimmed, min 2 chars |
 | `email` | String | Required, unique, valid format |
-| `password` | String | Required, min 6 chars *(plain text for now — hashing arrives in Weeks 5–6)* |
+| `password` | String | Required, min 6 chars, hashed with bcrypt, never returned in queries |
 | `bio` | String | Optional, max 200 chars |
+| `avatar` | String | URL of uploaded profile picture |
+| `coverPhoto` | String | URL of uploaded cover image, optional |
 | `role` | String | Enum: `user`, `admin` — default `user` |
-| `createdAt` | Date | Auto via `timestamps: true` |
+| `followers` | [ObjectId] | Refs to `User` — who follows this user |
+| `following` | [ObjectId] | Refs to `User` — who this user follows |
 
-### Post
+### Post (extended from Week 4)
 
 | Field | Type | Rules |
 |---|---|---|
-| `title` | String | Required, min 5, max 150 chars |
-| `content` | String | Required, min 20 chars |
-| `category` | String | Enum: `Tech`, `Lifestyle`, `Education`, `Business`, `Other` |
-| `tags` | [String] | Optional, max 5 tags |
+| `content` | String | Required, min 1, max 500 chars |
+| `image` | String | Optional URL of uploaded post image |
 | `author` | ObjectId | Required, ref `User` |
+| `likes` | [ObjectId] | Refs to `User` who liked the post |
 | `comments` | [ObjectId] | Refs to `Comment` |
-| `likes` | Number | Default `0` |
-| `isPublished` | Boolean | Default `false` |
-| `createdAt` / `updatedAt` | Date | Auto via `timestamps: true` |
+| `tags` | [String] | Optional, max 5 |
 
-### Comment
+### Comment (unchanged from Week 4)
 
 | Field | Type | Rules |
 |---|---|---|
-| `text` | String | Required, min 2, max 500 chars |
+| `text` | String | Required, min 1, max 300 chars |
 | `author` | ObjectId | Required, ref `User` |
 | `post` | ObjectId | Required, ref `Post` |
-| `createdAt` | Date | Auto via `timestamps: true` |
+
+### Notification (new)
+
+| Field | Type | Rules |
+|---|---|---|
+| `recipient` | ObjectId | Required, ref `User` — who receives it |
+| `sender` | ObjectId | Required, ref `User` — who triggered it |
+| `type` | String | Enum: `like`, `comment`, `follow` |
+| `post` | ObjectId | Ref `Post`, optional — only for like/comment |
+| `isRead` | Boolean | Default `false` |
 
 ---
 
 ## API Reference
 
-All responses follow one consistent shape:
+All responses share one shape:
 
 ```jsonc
 // Success
@@ -168,124 +210,108 @@ All responses follow one consistent shape:
 { "success": false, "message": "Error description", "errors": [ ... ] }
 ```
 
+### Auth — `/api/auth`
+
+| Method | Endpoint | Access |
+|---|---|---|
+| POST | `/register` | Public — hashes password, returns signed JWT |
+| POST | `/login` | Public — verifies credentials, returns signed JWT (7d expiry) |
+| GET | `/me` | Protected — returns the logged-in user from the token |
+
 ### Users — `/api/users`
 
-| Method | Endpoint | Description |
+| Method | Endpoint | Access |
 |---|---|---|
-| POST | `/register` | Register a new user |
-| POST | `/login` | Login with email + password |
-| GET | `/` | Get all users *(no passwords)* |
-| GET | `/:id` | Get one user, with published posts populated |
-| PUT | `/:id` | Update name, bio, or role |
-| DELETE | `/:id` | Delete user, cascades to their posts and comments |
+| GET | `/search?q=` | Protected — search users by name |
+| GET | `/:id` | Protected — profile with posts populated |
+| PUT | `/:id` | Protected, owner only — supports avatar/cover upload |
+| POST | `/:id/follow` | Protected — toggle follow/unfollow |
+| GET | `/:id/followers` | Protected |
+| GET | `/:id/following` | Protected |
 
 ### Posts — `/api/posts`
 
-| Method | Endpoint | Description |
+| Method | Endpoint | Access |
 |---|---|---|
-| POST | `/` | Create a post |
-| GET | `/` | Get published posts — supports `?category`, `?tag`, `?search`, `?sort` |
-| GET | `/all` | Get all posts including unpublished *(admin)* |
-| GET | `/:id` | Get one post, author and comments fully populated |
-| PUT | `/:id` | Update title, content, category, tags, or isPublished |
-| PATCH | `/:id/like` | Increment likes by 1 |
-| PATCH | `/:id/publish` | Toggle isPublished |
-| DELETE | `/:id` | Delete post, cascades to its comments |
+| POST | `/` | Protected — create, supports image upload |
+| GET | `/` | Protected — explore feed, paginated |
+| GET | `/feed` | Protected — posts from followed users + own |
+| GET | `/:id` | Protected — full post, author + comments populated |
+| PUT | `/:id` | Protected, owner only |
+| DELETE | `/:id` | Protected, owner only — cascades comment deletion |
+| PATCH | `/:id/like` | Protected — toggle like |
 
 ### Comments — `/api/comments`
 
-| Method | Endpoint | Description |
+| Method | Endpoint | Access |
 |---|---|---|
-| POST | `/` | Add a comment |
-| GET | `/post/:postId` | Get all comments for a post, author name populated |
-| PUT | `/:id` | Edit comment text |
-| DELETE | `/:id` | Delete comment, removed from parent post's reference array |
+| POST | `/` | Protected |
+| GET | `/post/:postId` | Protected |
+| DELETE | `/:id` | Protected — comment or post owner only |
 
----
+### Notifications — `/api/notifications`
 
-## Filtering & Search
-
-`GET /api/posts` supports optional query parameters that can be combined:
-
-| Param | Example | Behavior |
+| Method | Endpoint | Access |
 |---|---|---|
-| `category` | `?category=tech` | Exact match, case insensitive |
-| `tag` | `?tag=javascript` | Matches posts containing this tag |
-| `search` | `?search=react` | Regex search across title and content |
-| `sort` | `?sort=popular` | `latest` (default) sorts by newest, `popular` sorts by likes |
+| GET | `/` | Protected |
+| PATCH | `/:id/read` | Protected |
+| PATCH | `/mark-all-read` | Protected |
 
 ---
 
-## Error Handling
+## Real-Time Notifications
 
-| Scenario | Status | Response |
-|---|---|---|
-| Invalid MongoDB ObjectId | `400` | Not a `500` crash — caught explicitly |
-| Duplicate email on register | `409` | Clear conflict message with the field name |
-| Validation failure on POST/PUT | `400` | Array of field-level error messages |
-| Unmatched route | `404` | JSON response, never an HTML error page |
+`server.js` maintains an in-memory `Map` of `userId → socketId` for currently connected clients. When a user likes, comments on, or follows another user, the relevant controller creates a `Notification` document and — if the recipient is online — emits a Socket.io event directly to their socket.
 
----
-
-## Population
-
-- `GET /api/posts/:id` returns the full author object (`name`, `email`), not just an id, and all comments with each comment's author name resolved.
-- `GET /api/users/:id` returns the user's published posts array, fully populated.
-
----
-
-## Cascading Deletes
-
-| Action | Effect |
-|---|---|
-| Delete a user | Their posts are deleted, their comments are deleted, and any comments they wrote on others' posts are removed too |
-| Delete a post | Every comment attached to that post is deleted |
+The client's `SocketContext` connects on login, tracks the online-users list, and feeds incoming events to the notification bell UI without a page refresh.
 
 ---
 
 ## Setup
 
 ```bash
-# 1. Install dependencies
+# Server
+cd server
 npm install
-
-# 2. Create a .env file in the project root with the variables below
-
-# 3. Run in development (auto-restart on changes)
+# create a .env file — see template below
 npm run dev
 
-# 4. Or run in production mode
-npm start
+# Client (separate terminal)
+cd client
+npm install
+npm run dev
 ```
 
-**Required environment variables** (create a `.env` file — not included in this repo):
+**Required server environment variables** (`server/.env` — not committed, use `.env.example` as a template):
 
 ```
 PORT=5000
-MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>/blogdb?retryWrites=true&w=majority
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>/connectsphere?appName=Cluster0
+JWT_SECRET=<your-jwt-secret-key>
+JWT_EXPIRES_IN=7d
+CLIENT_URL=http://localhost:5173
 ```
 
-> Note: no `.env.example` file is included yet. If you're setting this project up for the first time, create `.env` manually using the template above, and consider committing an `.env.example` with placeholder values so future setup doesn't rely on this README alone.
+The client has no required environment variables — it talks to the API via a hardcoded/relative base URL in `src/utils/api.js`.
+
+Image uploads are stored locally under `server/uploads/` (served statically) rather than a cloud provider — no Cloudinary configuration is required for this build.
 
 ---
 
 ## Testing
 
-A full Postman collection (`postman_collection.json`) is included, organized into **Users**, **Posts**, **Comments**, and **Error Handling Checks** folders. It covers:
-
-- A valid request for every one of the 18 endpoints
-- Invalid input triggering `400` validation errors
-- Duplicate email registration triggering `409`
-- Deleting a user and confirming their posts and comments are gone too
-
-Import it into Postman, set the `baseUrl` variable to your running server, and run requests top to bottom — collection variables (`userId`, `postId`, `commentId`) get populated automatically as you go.
+A Postman collection (`server/postman_collection.json`) is included, organized by resource (Auth, Users, Posts, Comments, Notifications). Import it, set `baseUrl`, and run the register → login flow first so `{{token}}` gets populated for subsequent protected requests.
 
 ---
 
-## Roadmap
+## Security Notes
 
-This backend is scoped intentionally. JWT authentication, password hashing, and the React frontend are **not** part of Week 4 — they arrive in Weeks 5 and 6, built on top of what's here.
+- Passwords are hashed with bcrypt before storage — never stored or returned in plain text.
+- All protected routes verify the JWT server-side via `middleware/auth.js` — the client hiding a button is not treated as sufficient protection anywhere in this codebase.
+- Ownership checks (post edit/delete, comment delete) happen in the controller, not just the UI.
+- `.env` is excluded from version control; only `.env.example` (with placeholder values) is committed.
+- A user cannot follow themselves — validated server-side in `userController.js`, not just disabled in the UI.
 
 ---
 
-*Built as part of the MERN Stack Summer Internship at The Tech Pulses — Week 4 Task.*
+*Built as part of the MERN Stack Summer Internship at The Tech Pulses — Week 5–6 Capstone Task.*
